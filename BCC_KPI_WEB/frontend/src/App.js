@@ -37,7 +37,6 @@ const App = () => {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // СИНХРОНИЗАЦИЯ ПРОФИЛЯ: Если в токене UnitName null, подтягиваем его из списка юнитов
   useEffect(() => {
     if (user && !user.UnitName && units.length > 0) {
       const myUnit = units.find(u => String(u.Id) === String(user.UnitId));
@@ -50,10 +49,11 @@ const App = () => {
   }, [units, user]);
 
   const exportToExcel = (data, reportName) => {
-    const periodLabel = filters.periodType === 'year' ? `${filters.year} год` : 
-                        filters.periodType === 'quarter' ? `${Math.ceil(filters.month/3)} кв. ${filters.year}` : 
+    const periodLabel = filters.periodType === 'year' ?
+                        `${filters.year} год` : 
+                        filters.periodType === 'quarter' ?
+                        `${Math.ceil(filters.month/3)} кв. ${filters.year}` : 
                         `${filters.month}.${filters.year}`;
-    
     const header = [
       ["ОАО 'БЕЛОРУССКАЯ ЦЕМЕНТНАЯ КОМПАНИЯ'"],
       [`ОТЧЕТ: ${reportName}`],
@@ -61,14 +61,12 @@ const App = () => {
       [""],
       ["Наименование", "План (BYN)", "Факт (BYN)", "Выполнение %"]
     ];
-
     const rows = data.map(item => [
       item.UnitName || item.ProductName,
       item.PlanVal || item.TargetValue || 0,
       item.FactVal || item.ActualValue || 0,
       item.PlanVal > 0 ? ((item.FactVal / item.PlanVal) * 100).toFixed(1) : "0.0"
     ]);
-
     const ws = XLSX.utils.aoa_to_sheet([...header, ...rows]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "KPI_Report");
@@ -89,10 +87,11 @@ const App = () => {
           <NavItem icon={<BarChart2/>} label="Дашборд" active={activeTab==='dashboard'} onClick={()=>setActiveTab('dashboard')} />
           {user.Role !== 'Director' && <NavItem icon={<PlusCircle/>} label="Ввод данных" active={activeTab==='entry'} onClick={()=>setActiveTab('entry')} />}
           {user.Role === 'HeadManager' && <NavItem icon={<Settings/>} label="Управление" active={activeTab==='admin'} onClick={()=>setActiveTab('admin')} />}
+          {user.Role === 'HeadManager' && <NavItem icon={<Edit3 size={16}/>} label="Коррекция KPI и Персонал" active={activeTab==='kpi_mgmt'} onClick={()=>setActiveTab('kpi_mgmt')} />}
           <NavItem icon={<FileText/>} label="Отчеты" active={activeTab==='reports'} onClick={()=>setActiveTab('reports')} />
         </nav>
         <div style={styles.userCard}>
-          <b>{user.FullName}</b><br/><small>{user.Role === 'HeadManager' ? 'Ведущий специалист' : (user.UnitName || 'Холдинг')}</small>
+          <b>{user.FullName}</b><br/><small>{user.Role === 'HeadManager' ? 'Ведущий специалист' : (user.UnitName || 'Ххолдинг')}</small>
           <button onClick={()=>{localStorage.clear(); window.location.reload();}} style={styles.logoutBtn}><LogOut size={14}/> Выход</button>
         </div>
       </aside>
@@ -148,6 +147,7 @@ const App = () => {
         {activeTab === 'admin' && <AdminSection units={units} products={products} refresh={fetchData} />}
         {activeTab === 'entry' && <EntrySection user={user} products={products} units={units} refresh={fetchData} filters={filters} />}
         {activeTab === 'reports' && <ReportsSection units={units} filters={filters} exportFn={exportToExcel} />}
+        {activeTab === 'kpi_mgmt' && <KpiManagementSection units={units} products={products} refresh={fetchData} filters={filters} />}
       </main>
     </div>
   );
@@ -160,36 +160,31 @@ const EntrySection = ({ user, products, units, refresh, filters }) => {
     const [allowedIds, setAllowedIds] = useState([]);
     const [loadingSpec, setLoadingSpec] = useState(false);
 
-    // Умное определение названия завода
     const currentUnitName = useMemo(() => {
         const targetId = isLead ? form.unitId : user.UnitId;
         const found = units.find(u => String(u.Id) === String(targetId));
         return found ? found.UnitName : (targetId ? `Завод ID: ${targetId}` : "Не выбрано");
     }, [units, form.unitId, user.UnitId, isLead]);
 
-    // Загрузка специализации (что разрешено производить этому заводу)
-   useEffect(() => {
-    const targetUnitId = isLead ? form.unitId : user.UnitId;
-    if (!targetUnitId) { 
-        console.log("Юнит не выбран, скипаем");
-        setAllowedIds([]); 
-        return; 
-    }
+    useEffect(() => {
+        const targetUnitId = isLead ? form.unitId : user.UnitId;
+        if (!targetUnitId) { 
+            setAllowedIds([]); 
+            return; 
+        }
 
-    setLoadingSpec(true);
-    axios.get(`/api/units/${targetUnitId}/products`)
-        .then(res => {
-            console.log("Данные из БД прилетели:", res.data); // ПРОВЕРЬ В КОНСОЛИ (F12)
-            // Вытаскиваем ID и превращаем в числа, чтобы сравнение точно сработало
-            const ids = res.data.map(item => Number(item.ProductId || item.id || item.Id));
-            setAllowedIds(ids);
-        })
-        .catch(err => {
-            console.error("Ошибка запроса специализации:", err);
-            setAllowedIds([]);
-        })
-        .finally(() => setLoadingSpec(false));
-}, [form.unitId, user.UnitId, isLead]);
+        setLoadingSpec(true);
+        axios.get(`/api/units/${targetUnitId}/products`)
+            .then(res => {
+                const ids = res.data.map(item => Number(item.ProductId || item.id || item.Id));
+                setAllowedIds(ids);
+            })
+            .catch(err => {
+                console.error("Ошибка запроса специализации:", err);
+                setAllowedIds([]);
+            })
+            .finally(() => setLoadingSpec(false));
+    }, [form.unitId, user.UnitId, isLead]);
 
     const categories = useMemo(() => products.filter(p => !p.ParentId), [products]);
     const filteredProducts = useMemo(() => 
@@ -245,13 +240,14 @@ const EntrySection = ({ user, products, units, refresh, filters }) => {
                         <input type="number" value={form.val} onChange={e=>setForm({...form, val:e.target.value})} style={styles.input} placeholder="0.00"/>
                     </div>
 
-                    <button onClick={save} style={{...styles.submitBtn, gridColumn: '1 / 3', marginTop: '10px'}}>{isLead ? "УТВЕРДИТЬ ПЛАН" : "СОХРАНИТЬ ДАННЫЕ"}</button>
+                    <button onClick={save} style={{...styles.submitBtn, gridColumn: '1 / 3', marginTop: '10px'}}>{isLead ? "УТВЕРДИТЬ ПЛАН" : "СОХРАНИТЬ DАННЫЕ"}</button>
                 </div>
             </div>
         </div>
     );
 };
 
+// --- СЕКЦИЯ ОТЧЕТОВ С ИНТЕГРАЦИЕЙ СКАЧИВАНИЯ WORD ДОКУМЕНТА ---
 const ReportsSection = ({ units, filters, exportFn }) => {
   const [repType, setRepType] = useState('holding');
   const [data, setData] = useState([]);
@@ -263,6 +259,26 @@ const ReportsSection = ({ units, filters, exportFn }) => {
       const res = await axios.get(`/api/reports?type=${repType}&unitId=${selUnit}&year=${filters.year}&month=${filters.month}&periodType=${filters.periodType}`);
       setData(res.data);
   };
+
+  // Метод для скачивания бинарного Word-файла с бэкенда
+  const exportToWord = async () => {
+      try {
+          const response = await axios.get(`/api/reports/word?type=${repType}&unitId=${selUnit}&year=${filters.year}&month=${filters.month}&periodType=${filters.periodType}`, {
+              responseType: 'blob' // Критично для бинарных файлов (.docx)
+          });
+          const url = window.URL.createObjectURL(new Blob([response.data]));
+          const link = document.createElement('a');
+          link.href = url;
+          link.setAttribute('download', `BCC_Report_${repType}_${filters.year}.docx`);
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+      } catch (err) {
+          alert("Ошибка при генерации официального отчета Word!");
+          console.error(err);
+      }
+  };
+  
   return (
     <div style={styles.content}>
       <div style={styles.card}>
@@ -272,7 +288,13 @@ const ReportsSection = ({ units, filters, exportFn }) => {
         <div style={{display:'flex', gap:'10px', marginBottom:'20px'}}>
             {repType==='unit' && <select style={styles.select} value={selUnit} onChange={e=>setSelUnit(e.target.value)}>{units.map(u=><option key={u.Id} value={u.Id}>{u.UnitName}</option>)}</select>}
             <button onClick={load} style={styles.accentBtn}>Сформировать</button>
-            {data.length > 0 && <button onClick={() => exportFn(data, `Отчет_${repType}`)} style={styles.exportBtn}><Download size={16}/> EXCEL</button>}
+ 
+            {data.length > 0 && (
+                <>
+                    <button onClick={() => exportFn(data, `Отчет_${repType}`)} style={styles.exportBtn}><Download size={16}/> EXCEL</button>
+                    <button onClick={exportToWord} style={{...styles.exportBtn, background: '#1f4e79'}}><Download size={16}/> WORD</button>
+                </>
+            )}
         </div>
         <table style={styles.adminTable}>
           <thead><tr><th>Наименование</th><th>План</th><th>Факт</th><th>%</th></tr></thead>
@@ -288,7 +310,10 @@ const AdminSection = ({ units, products, refresh }) => {
     const [editItem, setEditItem] = useState(null);
     const [selUnitProducts, setSelUnitProducts] = useState('');
     const [checkedIds, setCheckedIds] = useState([]);
-    const categories = useMemo(() => products.filter(p => !p.ParentId), [products]);
+    const [categories, setCategories] = useState([]);
+
+    const categoriesMemo = useMemo(() => products.filter(p => !p.ParentId), [products]);
+    useEffect(() => { setCategories(categoriesMemo); }, [categoriesMemo]);
     
     useEffect(() => { if(units.length > 0) setSelUnitProducts(units[0].Id); }, [units]);
 
@@ -297,7 +322,7 @@ const AdminSection = ({ units, products, refresh }) => {
           axios.get(`/api/units/${selUnitProducts}/products`).then(res => setCheckedIds(res.data.map(i => i.ProductId || i.Id)));
       }
     }, [tab, selUnitProducts]);
-    
+
     const saveAssignment = async () => {
       await axios.post('/api/admin/unit-products', { unitId: selUnitProducts, productIds: checkedIds });
       alert("Специализация обновлена!");
@@ -309,7 +334,7 @@ const AdminSection = ({ units, products, refresh }) => {
       await axios.post(`/api/admin/${tab}/save`, data);
       setEditItem(null); refresh();
     };
-    
+
     return (
       <div style={styles.content}>
           <div style={styles.card}>
@@ -326,18 +351,21 @@ const AdminSection = ({ units, products, refresh }) => {
                       </select>
                       <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'10px'}}>
                           {products.filter(p=>p.ParentId).map(p=>(
-                              <div key={p.Id} onClick={() => setCheckedIds(prev => prev.includes(p.Id) ? prev.filter(x=>x!==p.Id) : [...prev, p.Id])}
+                               <div key={p.Id} onClick={() => setCheckedIds(prev => prev.includes(p.Id) ? prev.filter(x=>x!==p.Id) : [...prev, p.Id])}
                                    style={{padding:'10px', border:'1px solid #ddd', borderRadius:'4px', cursor:'pointer', background: checkedIds.includes(p.Id) ? '#e3f2fd' : 'white', display:'flex', alignItems:'center', gap:'10px'}}>
                                   <input type="checkbox" checked={checkedIds.includes(p.Id)} readOnly />
                                   <span>{p.ProductName}</span>
-                              </div>
+                               </div>
                           ))}
                       </div>
                       <button onClick={saveAssignment} style={{...styles.submitBtn, marginTop:'20px'}}>СОХРАНИТЬ СПЕЦИАЛИЗАЦИЮ</button>
                   </div>
               ) : (
                   <>
-                      <button onClick={()=>setEditItem({})} style={{...styles.accentBtn, marginBottom:'15px'}}>+ Добавить</button>
+                      {tab === 'products' && (
+                           <button onClick={()=>setEditItem({})} style={{...styles.accentBtn, marginBottom:'15px'}}>+ Добавить номенклатуру</button>
+                      )}
+                      
                       <table style={styles.adminTable}>
                           <thead>
                               {tab==='units' ? <tr><th>Название</th><th>УНП</th><th>Директор</th><th>Действия</th></tr> : <tr><th>Продукт</th><th>Категория</th><th>Ед. изм.</th><th>Действия</th></tr>}
@@ -405,6 +433,184 @@ const LoginScreen = ({ setUser }) => {
         } catch(err) { alert("Неверный логин или пароль!"); }
     };
     return (<div style={styles.loginPage}><form onSubmit={login} style={styles.loginCard}><h1 style={{color: BCC_BLUE, textAlign:'center'}}>БЦК KPI WEB</h1><input name="u" style={styles.input} placeholder="Логин" required/><input name="p" style={styles.input} type="password" placeholder="Пароль" required/><button type="submit" style={styles.submitBtn}>ВХОД В СИСТЕМУ</button></form></div>);
+};
+
+const KpiManagementSection = ({ units, products, refresh, filters }) => {
+    const [subTab, setSubTab] = useState('kpi_edit');
+    const [selUnit, setSelUnit] = useState('');
+    const [isTarget, setIsTarget] = useState(true);
+    const [kpiList, setKpiList] = useState([]);
+    const [editingId, setEditingId] = useState(null);
+    const [newVal, setNewVal] = useState('');
+
+    const [unitForm, setUnitForm] = useState({
+        UnitName: '', UNP: '', LegalAddress: '', DirectorName: '', PhoneNumber: '', UnitType: 'Завод',
+        Username: '', Password: '', FullName: ''
+    });
+
+    const loadKpiRecords = async () => {
+        if (!selUnit) return alert("Выберите предприятие!");
+        try {
+            const res = await axios.get(`/api/admin/kpi-manage/list?unitId=${selUnit}&year=${filters.year}&month=${filters.month}&isTarget=${isTarget}`);
+            setKpiList(res.data);
+            setEditingId(null);
+        } catch (err) { alert("Ошибка загрузки данных!"); }
+    };
+
+    const handleUpdate = async (id) => {
+        if (!newVal) return alert("Введите значение!");
+        try {
+            await axios.post('/api/admin/kpi-manage/update', { id, val: newVal, isTarget });
+            alert("Показатель успешно обновлен!");
+            loadKpiRecords();
+            refresh();
+        } catch (err) { alert("Ошибка обновления!"); }
+    };
+
+    const handleDelete = async (id) => {
+        if (!window.confirm("Удалить эту запись навсегда из базы данных?")) return;
+        try {
+            await axios.delete(`/api/admin/kpi-manage/delete/${isTarget}/${id}`);
+            alert("Запись удалена!");
+            loadKpiRecords();
+            refresh();
+        } catch (err) { alert("Ошибка удаления!"); }
+    };
+
+    const handleCreateUnitWithManager = async (e) => {
+        e.preventDefault();
+        if (!unitForm.UnitName || !unitForm.Username || !unitForm.Password) {
+            return alert("Заполните Название завода, Логин и Пароль менеджера!");
+        }
+        try {
+            await axios.post('/api/admin/units-with-manager', unitForm);
+            alert("Завод и аккаунт менеджера успешно созданы!");
+            setUnitForm({
+                UnitName: '', UNP: '', LegalAddress: '', DirectorName: '', PhoneNumber: '', UnitType: 'Завод',
+                Username: '', Password: '', FullName: ''
+            });
+            refresh();
+        } catch (err) { 
+            console.error(err);
+            alert("Ошибка при создании! Проверьте, что логин уникален и бэкенд запущен."); 
+        }
+    };
+
+    return (
+        <div style={styles.content}>
+            <div style={styles.card}>
+                <div style={styles.reportTabs}>
+                    <button onClick={() => setSubTab('kpi_edit')} style={subTab === 'kpi_edit' ? styles.tabActive : styles.tab}>Изменение / Удаление KPI</button>
+                    <button onClick={() => setSubTab('add_unit_manager')} style={subTab === 'add_unit_manager' ? styles.tabActive : styles.tab}>Новый завод + Менеджер</button>
+                </div>
+
+                {subTab === 'kpi_edit' ? (
+                    <div>
+                        <h3 style={{marginBottom:'10px'}}>Корректировка планов и фактов</h3>
+                        <p style={{fontSize:'13px', color:'#666', marginBottom:'15px'}}>Фильтрация по дате (Месяц/Год) берется из общей панели сверху.</p>
+                        <div style={{ display: 'flex', gap: '15px', marginBottom: '20px', alignItems: 'center' }}>
+                            <select value={selUnit} onChange={e => setSelUnit(e.target.value)} style={styles.select}>
+                                <option value="">-- Выберите завод --</option>
+                                {units.map(u => <option key={u.Id} value={u.Id}>{u.UnitName}</option>)}
+                            </select>
+
+                            <select value={isTarget} onChange={e => setIsTarget(e.target.value === 'true')} style={styles.select}>
+                                <option value="true">Планы (KPI_Targets)</option>
+                                <option value="false">Факты (KPI_Actuals)</option>
+                            </select>
+
+                            <button onClick={loadKpiRecords} style={styles.accentBtn}>Показать записи</button>
+                        </div>
+
+                        <table style={styles.adminTable}>
+                            <thead>
+                                <tr>
+                                    <th>Номенклатура</th>
+                                    <th>Период</th>
+                                    <th>Значение (BYN)</th>
+                                    <th>Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {kpiList.length === 0 ? (
+                                    <tr><td colSpan="4" style={{ textAlign: 'center', padding: '20px', color:'#888' }}>Нет данных за указанный период. Нажмите "Показать записи".</td></tr>
+                                ) : kpiList.map(item => (
+                                    <tr key={item.Id}>
+                                        <td><b>{item.ProductName}</b></td>
+                                        <td>{item.Month}.{item.Year}</td>
+                                        <td>
+                                            {editingId === item.Id ? (
+                                                <input type="number" value={newVal} onChange={e => setNewVal(e.target.value)} style={{ ...styles.input, width: '150px' }} />
+                                            ) : (
+                                                <span>{formatBYN(item.Val)}</span>
+                                            )}
+                                        </td>
+                                        <td>
+                                            {editingId === item.Id ? (
+                                                <>
+                                                    <button onClick={() => handleUpdate(item.Id)} style={{ ...styles.accentBtn, padding: '6px 12px', marginRight: '5px' }}>Сохранить</button>
+                                                    <button onClick={() => setEditingId(null)} style={{ ...styles.cancelBtn, padding: '6px 12px' }}>Отмена</button>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <button onClick={() => { setEditingId(item.Id); setNewVal(item.Val); }} style={styles.iconBtn}><Edit3 size={16} /></button>
+                                                    <button onClick={() => handleDelete(item.Id)} style={{ ...styles.iconBtn, color: 'red', marginLeft: '12px' }}><Trash2 size={16} /></button>
+                                                </>
+                                            )}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                ) : (
+                    <div>
+                        <h3>Регистрация предприятия и создание учетной записи менеджера</h3>
+                        <form onSubmit={handleCreateUnitWithManager} style={styles.formGrid}>
+                            <div style={styles.inputBox}>
+                                <label>Название предприятия *</label>
+                                <input value={unitForm.UnitName} onChange={e => setUnitForm({ ...unitForm, UnitName: e.target.value })} style={styles.input} required placeholder="Например, ООО ОФИСТОН..."/>
+                            </div>
+                            <div style={styles.inputBox}>
+                                <label>УНП</label>
+                                <input value={unitForm.UNP} onChange={e => setUnitForm({ ...unitForm, UNP: e.target.value })} style={styles.input} placeholder="9 знаков"/>
+                            </div>
+                            <div style={styles.inputBox}>
+                                <label>ФИО Директора</label>
+                                <input value={unitForm.DirectorName} onChange={e => setUnitForm({ ...unitForm, DirectorName: e.target.value })} style={styles.input} placeholder="Петров А.Н."/>
+                            </div>
+                            <div style={styles.inputBox}>
+                                <label>Тип юнита</label>
+                                <select value={unitForm.UnitType} onChange={e => setUnitForm({ ...unitForm, UnitType: e.target.value })} style={styles.select}>
+                                    <option value="Завод">Завод</option>
+                                    <option value="Филиал">Филиал</option>
+                                </select>
+                            </div>
+
+                            <div style={{ gridColumn: '1 / 3', borderTop: '1px solid #eee', marginTop: '15px', paddingTop: '15px' }}>
+                                <h4 style={{color: BCC_BLUE}}>Создание учетной записи нового менеджера (Ввод факта)</h4>
+                            </div>
+
+                            <div style={styles.inputBox}>
+                                <label>Логин для входа (Username) *</label>
+                                <input value={unitForm.Username} onChange={e => setUnitForm({ ...unitForm, Username: e.target.value })} style={styles.input} required placeholder="manageroff"/>
+                            </div>
+                            <div style={styles.inputBox}>
+                                <label>Пароль *</label>
+                                <input value={unitForm.Password} onChange={e => setUnitForm({ ...unitForm, Password: e.target.value })} style={styles.input} type="password" required placeholder="••••••••"/>
+                            </div>
+                            <div style={{ ...styles.inputBox, gridColumn: '1 / 3' }}>
+                                <label>Полное ФИО сотрудника</label>
+                                <input value={unitForm.FullName} onChange={e => setUnitForm({ ...unitForm, FullName: e.target.value })} style={styles.input} placeholder="Петров Руслан Павлович"/>
+                            </div>
+
+                            <button type="submit" style={{ ...styles.submitBtn, gridColumn: '1 / 3', marginTop: '15px' }}>ЗАРЕГИСТРИРОВАТЬ И СОЗДАТЬ АККАУНТ</button>
+                        </form>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
 };
 
 const styles = {

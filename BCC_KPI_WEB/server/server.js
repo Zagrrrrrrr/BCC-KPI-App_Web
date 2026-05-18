@@ -1,6 +1,9 @@
 const express = require('express');
 const sql = require('mssql');
 const cors = require('cors');
+const bcrypt = require('bcrypt'); // Подключаем bcrypt для защиты паролей менеджеров
+const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, AlignmentType, WidthType } = require('docx'); // Подключаем docx для отчетов
+
 const app = express();
 
 app.use(express.json());
@@ -15,6 +18,17 @@ const dbConfig = {
     options: { encrypt: false, trustServerCertificate: true }
 };
 
+// Создаем глобальную переменную для пула подключений
+let pool;
+
+// Подключаемся к базе один раз при старте сервера
+sql.connect(dbConfig).then(p => {
+    pool = p;
+    console.log("🚀 Успешное подключение к MS SQL Server");
+}).catch(err => {
+    console.error("❌ Ошибка глобального подключения к БД:", err.message);
+});
+
 const getDateCondition = (year, month, periodType) => {
     let condition = `Year = ${year}`;
     if (periodType === 'month') {
@@ -27,38 +41,63 @@ const getDateCondition = (year, month, periodType) => {
 };
 
 // --- АВТОРИЗАЦИЯ ---
+// --- АВТОРИЗАЦИЯ (ИСПРАВЛЕНА ПОД ХЕШИРОВАНИЕ) ---
+// --- ГИБРИДНАЯ АВТОРИЗАЦИЯ (ДЛЯ СТАРЫХ ТЕКСТОВЫХ И НОВЫХ ХЕШИРОВАННЫХ ПАРОЛЕЙ) ---
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
     try {
-        let pool = await sql.connect(dbConfig);
+        // 1. Ищем пользователя по Username
         let result = await pool.request()
-            .input('u', sql.NVarChar, username).input('p', sql.NVarChar, password)
-            .query(`SELECT u.Id, u.FullName, u.Role, u.UnitId, un.UnitName
+            .input('u', sql.NVarChar, username)
+            .query(`SELECT u.Id, u.FullName, u.Role, u.UnitId, u.PasswordHash, un.UnitName
                     FROM Users u LEFT JOIN Units un ON u.UnitId = un.Id
-                    WHERE u.Username = @u AND u.PasswordHash = @p`);
-        if (result.recordset.length > 0) res.json(result.recordset[0]);
-        else res.status(401).json({ message: "Ошибка входа" });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+                    WHERE u.Username = @u`);
+
+        if (result.recordset.length > 0) {
+            const user = result.recordset[0];
+            const storedPassword = user.PasswordHash;
+
+            let isMatch = false;
+
+            // 2. Проверяем, захеширован ли пароль в БД с помощью bcrypt (строка начинается с $2b$)
+            if (storedPassword && storedPassword.startsWith('$2b$')) {
+                isMatch = await bcrypt.compare(password, storedPassword);
+            } else {
+                // Если в БД обычный текст (для старых записей вроде director123)
+                isMatch = (password === storedPassword);
+            }
+
+            if (isMatch) {
+                // Удаляем конфиденциальные данные перед отправкой на фронт
+                delete user.PasswordHash;
+                return res.json(user);
+            } else {
+                return res.status(401).json({ message: "Неверный пароль!" });
+            }
+        } else {
+            return res.status(401).json({ message: "Пользователь не найден!" });
+        }
+    } catch (err) { 
+        console.error("Ошибка при авторизации:", err.message);
+        res.status(500).json({ error: err.message }); 
+    }
 });
 
 // --- СПРАВОЧНИКИ ---
 app.get('/api/products', async (req, res) => {
     try {
-        let pool = await sql.connect(dbConfig);
         res.json((await pool.request().query("SELECT * FROM Products")).recordset);
     } catch (err) { res.status(500).send(err.message); }
 });
 
 app.get('/api/units', async (req, res) => {
     try {
-        let pool = await sql.connect(dbConfig);
         res.json((await pool.request().query("SELECT * FROM Units")).recordset);
     } catch (err) { res.status(500).send(err.message); }
 });
 
 app.get('/api/units/:id/products', async (req, res) => {
     try {
-        let pool = await sql.connect(dbConfig);
         let result = await pool.request()
             .input('uid', sql.Int, req.params.id)
             .query(`SELECT p.Id FROM Products p 
@@ -71,7 +110,6 @@ app.get('/api/units/:id/products', async (req, res) => {
 app.post('/api/admin/unit-products', async (req, res) => {
     const { unitId, productIds } = req.body;
     try {
-        let pool = await sql.connect(dbConfig);
         const transaction = new sql.Transaction(pool);
         await transaction.begin();
         const request = new sql.Request(transaction);
@@ -93,7 +131,6 @@ app.post('/api/admin/:type/save', async (req, res) => {
     const { type } = req.params;
     const data = req.body;
     try {
-        let pool = await sql.connect(dbConfig);
         let request = pool.request();
         if (type === 'units') {
             request.input('un', sql.NVarChar, data.UnitName).input('unp', sql.NVarChar, data.UNP || null)
@@ -124,7 +161,6 @@ app.post('/api/admin/:type/save', async (req, res) => {
 
 app.delete('/api/admin/:type/:id', async (req, res) => {
     try {
-        let pool = await sql.connect(dbConfig);
         const table = req.params.type === 'units' ? 'Units' : 'Products';
         await pool.request().input('id', sql.Int, req.params.id).query(`DELETE FROM ${table} WHERE Id=@id`);
         res.json({ success: true });
@@ -135,7 +171,6 @@ app.get('/api/reports', async (req, res) => {
     const { type, unitId, year, month, periodType } = req.query;
     const dateCond = getDateCondition(year, month, periodType);
     try {
-        let pool = await sql.connect(dbConfig);
         let request = pool.request();
         let query = "";
 
@@ -167,7 +202,6 @@ app.get('/api/stats', async (req, res) => {
     const { year, month, periodType } = req.query;
     const dateCond = getDateCondition(year, month, periodType);
     try {
-        let pool = await sql.connect(dbConfig);
         let result = await pool.request().query(`
             SELECT u.Id as UnitId, u.UnitName,
             ISNULL((SELECT SUM(TargetValue) FROM KPI_Targets WHERE UnitId=u.Id AND ${dateCond}), 0) as TargetValue,
@@ -182,7 +216,6 @@ app.post('/api/save', async (req, res) => {
     const table = isTarget ? 'KPI_Targets' : 'KPI_Actuals';
     const col = isTarget ? 'TargetValue' : 'ActualValue';
     try {
-        let pool = await sql.connect(dbConfig);
         await pool.request()
             .input('uid', sql.Int, unitId).input('pid', sql.Int, productId)
             .input('v', sql.Decimal(18,2), val).input('y', sql.Int, year)
@@ -194,4 +227,266 @@ app.post('/api/save', async (req, res) => {
     } catch (err) { res.status(500).send(err.message); }
 });
 
-app.listen(5000, () => console.log('🚀 FULL BCC Backend Running on 5000'));
+// =========================================================================
+// НАЧАЛО НОВОГО ФУНКЦИОНАЛА (КЕРРЕКЦИЯ KPI И СОЗДАНИЕ ЗАВОДА С МЕНЕДЖЕРОМ)
+// =========================================================================
+
+// 1. Получение списка планов или фактов для конкретного завода и периода
+app.get('/api/admin/kpi-manage/list', async (req, res) => {
+    const { unitId, year, month, isTarget } = req.query;
+    const table = isTarget === 'true' ? 'KPI_Targets' : 'KPI_Actuals';
+    const col = isTarget === 'true' ? 'TargetValue' : 'ActualValue';
+    try {
+        let result = await pool.request()
+            .input('uid', sql.Int, unitId)
+            .input('y', sql.Int, year)
+            .input('m', sql.Int, month)
+            .query(`
+                SELECT t.Id, t.UnitId, t.ProductId, t.${col} as Val, t.Year, t.Month, p.ProductName, u.UnitName
+                FROM ${table} t
+                JOIN Products p ON t.ProductId = p.Id
+                JOIN Units u ON t.UnitId = u.Id
+                WHERE t.UnitId = @uid AND t.Year = @y AND t.Month = @m
+            `);
+        res.json(result.recordset);
+    } catch (err) { res.status(500).send(err.message); }
+});
+
+// 2. Изменение значения конкретной записи KPI по её уникальному Id
+app.post('/api/admin/kpi-manage/update', async (req, res) => {
+    const { id, val, isTarget } = req.body;
+    const table = isTarget ? 'KPI_Targets' : 'KPI_Actuals';
+    const col = isTarget ? 'TargetValue' : 'ActualValue';
+    try {
+        await pool.request()
+            .input('id', sql.Int, id)
+            .input('v', sql.Decimal(18,2), val)
+            .query(`UPDATE ${table} SET ${col} = @v WHERE Id = @id`);
+        res.json({ success: true });
+    } catch (err) { res.status(500).send(err.message); }
+});
+
+// 3. Полное удаление записи KPI по её уникальному Id
+app.delete('/api/admin/kpi-manage/delete/:isTarget/:id', async (req, res) => {
+    const { isTarget, id } = req.params;
+    const table = isTarget === 'true' ? 'KPI_Targets' : 'KPI_Actuals';
+    try {
+        await pool.request()
+            .input('id', sql.Int, id)
+            .query(`DELETE FROM ${table} WHERE Id = @id`);
+        res.json({ success: true });
+    } catch (err) { res.status(500).send(err.message); }
+});
+
+// 4. ИСПРАВЛЕННЫЙ РОУТ: Создание нового предприятия ОДНОВРЕМЕННО с менеджером внутри транзакции
+app.post('/api/admin/units-with-manager', async (req, res) => {
+    const { UnitName, UNP, LegalAddress, DirectorName, PhoneNumber, UnitType, Username, Password, FullName } = req.body;
+    
+    // Проверка обязательных параметров формы
+    if (!UnitName || !Username || !Password) {
+        return res.status(400).json({ error: "Название завода, логин и пароль обязательны для заполнения!" });
+    }
+
+    const transaction = new sql.Transaction(pool);
+    
+    try {
+        await transaction.begin();
+        
+        // Шаг 1: Проверяем, уникален ли Username (чтобы избежать Ошибки 500/нарушения UNIQUE констрейнта)
+        const checkUserRequest = new sql.Request(transaction);
+        const userCheck = await checkUserRequest
+            .input('u', sql.NVarChar, Username)
+            .query('SELECT Id FROM Users WHERE Username = @u');
+
+        if (userCheck.recordset.length > 0) {
+            await transaction.rollback();
+            return res.status(400).json({ error: "Пользователь с таким логином уже зарегистрирован в системе!" });
+        }
+        
+        // Шаг 2: Создаем запись в таблице Units
+        const unitRequest = new sql.Request(transaction);
+        unitRequest.input('un', sql.NVarChar, UnitName)
+                   .input('unp', sql.NVarChar, UNP || null)
+                   .input('addr', sql.NVarChar, LegalAddress || null)
+                   .input('dir', sql.NVarChar, DirectorName || null)
+                   .input('ph', sql.NVarChar, PhoneNumber || null)
+                   .input('ut', sql.NVarChar, UnitType || 'Завод');
+        
+        let unitResult = await unitRequest.query(`
+            INSERT INTO Units (UnitName, UNP, LegalAddress, DirectorName, PhoneNumber, UnitType) 
+            OUTPUT INSERTED.Id
+            VALUES (@un, @unp, @addr, @dir, @ph, @ut)
+        `);
+        
+        const newUnitId = unitResult.recordset[0].Id;
+        
+        // Шаг 3: Хешируем полученный текстовый пароль через bcrypt
+        const hashedPassword = await bcrypt.hash(Password, 10);
+        
+        // Шаг 4: Создаем пользователя в Users со связью на UnitId и сохраняем хэш пароля в PasswordHash
+        const userRequest = new sql.Request(transaction);
+        userRequest.input('u', sql.NVarChar, Username)
+                   .input('p', sql.NVarChar, hashedPassword) // Сохраняем надежный хэш
+                   .input('fn', sql.NVarChar, FullName || DirectorName || 'Менеджер завода')
+                   .input('role', sql.NVarChar, 'factory_manager') 
+                   .input('uid', sql.Int, newUnitId);
+        
+        await userRequest.query(`
+            INSERT INTO Users (Username, PasswordHash, FullName, Role, UnitId, IsActive)
+            VALUES (@u, @p, @fn, @role, @uid, 1)
+        `);
+        
+        // Фиксируем все изменения в базе данных
+        await transaction.commit();
+        res.json({ success: true, unitId: newUnitId });
+        
+    } catch (err) {
+        // Если произошел сбой — откатываем транзакцию, база остается чистой
+        if (transaction._connected) {
+            await transaction.rollback();
+        }
+        console.error("Критическая ошибка транзакции на сервере:", err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// =========================================================================
+// КОНЕЦ НОВОГО ФУНКЦИОНАЛА
+// =========================================================================
+
+// =========================================================================
+// 📄 ДОБАВЛЕННЫЙ РОУТ ДЛЯ ГЕНЕРАЦИИ ОФИЦИАЛЬНОГО WORD ОТЧЕТА БЦК
+// =========================================================================
+app.get('/api/reports/word', async (req, res) => {
+    const { type, unitId, year, month, periodType } = req.query;
+    const dateCond = getDateCondition(year, month, periodType);
+
+    try {
+        let titleText = "ОТЧЕТ ПО ВЫПОЛНЕНИЮ KPI";
+        let subTitleText = `Период: ${periodType === 'month' ? 'Месяц ' + month : 'Квартал'} ${year} г.`;
+        let rowsData = [];
+
+        let query = "";
+        let request = pool.request();
+
+        // Повторяем логику твоего основного роута /api/reports для сбора данных
+        if (type === 'holding') {
+            titleText = "СВОДНЫЙ ОТЧЕТ ПО ВЫПОЛНЕНИЮ KPI ПРЕДПРИЯТИЙ ХОЛДИНГА";
+            query = `SELECT u.UnitName AS Name, 
+                    ISNULL((SELECT SUM(TargetValue) FROM KPI_Targets WHERE UnitId=u.Id AND ${dateCond}), 0) as PlanVal,
+                    ISNULL((SELECT SUM(ActualValue) FROM KPI_Actuals WHERE UnitId=u.Id AND ${dateCond}), 0) as FactVal
+                    FROM Units u`;
+        } else if (type === 'unit') {
+            request.input('unitId', sql.Int, unitId);
+            
+            // Получаем красивое имя конкретного завода для заголовка документа
+            let unitNameRes = await pool.request().input('uid', sql.Int, unitId).query("SELECT UnitName FROM Units WHERE Id = @uid");
+            let uName = unitNameRes.recordset[0]?.UnitName || "Предприятие";
+            titleText = `ОТЧЕТ ПО ВЫПОЛНЕНИЮ KPI ДЛЯ ПРЕДПРИЯТИЯ\n"${uName.toUpperCase()}"`;
+
+            query = `SELECT p.ProductName AS Name,
+                    ISNULL((SELECT SUM(TargetValue) FROM KPI_Targets WHERE ProductId=p.Id AND UnitId=@unitId AND ${dateCond}), 0) as PlanVal,
+                    ISNULL((SELECT SUM(ActualValue) FROM KPI_Actuals WHERE ProductId=p.Id AND UnitId=@unitId AND ${dateCond}), 0) as FactVal
+                    FROM Products p 
+                    JOIN UnitProducts up ON p.Id = up.ProductId
+                    WHERE up.UnitId = @unitId`;
+        } else {
+            titleText = "ОТЧЕТ В РАЗРЕЗЕ НОМЕНКЛАТУРЫ ПРОДУКЦИИ ХОЛДИНГА";
+            query = `SELECT p.ProductName AS Name,
+                    ISNULL((SELECT SUM(TargetValue) FROM KPI_Targets WHERE ProductId=p.Id AND ${dateCond}), 0) as PlanVal,
+                    ISNULL((SELECT SUM(ActualValue) FROM KPI_Actuals WHERE ProductId=p.Id AND ${dateCond}), 0) as FactVal
+                    FROM Products p`;
+        }
+
+        let dbResult = await request.query(query);
+        rowsData = dbResult.recordset;
+
+        // Строим заголовки таблицы Word
+        const tableRows = [
+            new TableRow({
+                children: [
+                    new TableCell({ children: [new Paragraph({ text: "Наименование показателя", bold: true })], width: { size: 50, type: WidthType.PERCENTAGE } }),
+                    new TableCell({ children: [new Paragraph({ text: "План", bold: true })], width: { size: 15, type: WidthType.PERCENTAGE } }),
+                    new TableCell({ children: [new Paragraph({ text: "Факт", bold: true })], width: { size: 15, type: WidthType.PERCENTAGE } }),
+                    new TableCell({ children: [new Paragraph({ text: "% Вып.", bold: true })], width: { size: 20, type: WidthType.PERCENTAGE } }),
+                ],
+            }),
+        ];
+
+        // Наполняем таблицу строками из БД
+        rowsData.forEach(row => {
+            const pct = row.PlanVal > 0 ? ((row.FactVal / row.PlanVal) * 100).toFixed(1) + '%' : '0.0%';
+            tableRows.push(new TableRow({
+                children: [
+                    new TableCell({ children: [new Paragraph(row.Name || '')] }),
+                    new TableCell({ children: [new Paragraph(Number(row.PlanVal).toLocaleString('ru-RU'))] }),
+                    new TableCell({ children: [new Paragraph(Number(row.FactVal).toLocaleString('ru-RU'))] }),
+                    new TableCell({ children: [new Paragraph(pct)] }),
+                ],
+            }));
+        });
+
+        // Создаем сам документ
+        const doc = new Document({
+            sections: [{
+                children: [
+                    // Официальная шапка холдинга БЦК по правому краю
+                    new Paragraph({
+                        alignment: AlignmentType.RIGHT,
+                        children: [
+                            new TextRun({
+                                text: "Республиканское производственно-торговое унитарное предприятие",
+                                italics: true,
+                                size: 18,
+                            }),
+                        ],
+                    }),
+                    new Paragraph({
+                        alignment: AlignmentType.RIGHT,
+                        children: [
+                            new TextRun({
+                                text: "«Управляющая компания холдинга «Белорусская цементная компания»",
+                                bold: true,
+                                italics: true,
+                                size: 18,
+                            }),
+                        ],
+                    }),
+                    new Paragraph({ text: "", spacing: { after: 500 } }),
+
+                    // Центрированный заголовок отчета
+                    new Paragraph({
+                        alignment: AlignmentType.CENTER,
+                        children: [
+                            new TextRun({ text: titleText, bold: true, size: 26 }),
+                        ],
+                    }),
+                    new Paragraph({
+                        alignment: AlignmentType.CENTER,
+                        spacing: { after: 400 },
+                        children: [
+                            new TextRun({ text: subTitleText, size: 20, color: "444444", italics: true }),
+                        ],
+                    }),
+
+                    // Рендерим готовую таблицу
+                    new Table({
+                        rows: tableRows,
+                        width: { size: 100, type: WidthType.PERCENTAGE }
+                    }),
+                ],
+            }],
+        });
+
+        const b64string = await Packer.toBase64String(doc);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        res.setHeader('Content-Disposition', 'attachment; filename=BCC_KPI_Report.docx');
+        res.send(Buffer.from(b64string, 'base64'));
+
+    } catch (error) {
+        console.error("Ошибка при генерации Word документа:", error);
+        res.status(500).send(error.message);
+    }
+});
+
+app.listen(5000, () => console.log('🚀 FULL BCC Backend Running on port 5000'));
