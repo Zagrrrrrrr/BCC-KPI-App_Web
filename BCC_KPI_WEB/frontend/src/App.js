@@ -18,6 +18,7 @@ const App = () => {
   const [stats, setStats] = useState([]);
   const [products, setProducts] = useState([]);
   const [units, setUnits] = useState([]);
+  const [biData, setBiData] = useState(null);
   const [filters, setFilters] = useState({ year: 2026, month: 4, periodType: 'month' });
 
   const fetchData = useCallback(async () => {
@@ -47,6 +48,25 @@ const App = () => {
       }
     }
   }, [units, user]);
+  // BI-аналитика: загрузка данных при изменении фильтров
+  useEffect(() => {
+    const fetchBiData = async () => {
+      try {
+        const res = await axios.get(`http://localhost:5000/api/analytics/dashboard?year=${filters.year}&month=${filters.month}&periodType=${filters.periodType}`);
+        setBiData(res.data);
+      } catch (err) {
+        console.error("Ошибка BI:", err);
+      }
+    };
+    fetchBiData();
+  }, [filters]);
+  // Функция, которая решает, какой цвет вернуть
+const getRiskColor = (pct) => {
+  if (pct < 80) return '#f8d7da'; // Светло-красный, если плохо
+  if (pct >= 100) return '#d4edda'; // Светло-зеленый, если перевыполнили
+  return 'transparent'; // Белый, если норма
+};
+  
 
   const exportToExcel = (data, reportName) => {
     const periodLabel = filters.periodType === 'year' ?
@@ -140,6 +160,44 @@ const App = () => {
                             <Bar dataKey="TargetValue" fill={BCC_BLUE} name="План"/><Bar dataKey="ActualValue" fill={BCC_YELLOW} name="Факт"/>
                         </BarChart>
                     </ResponsiveContainer>
+         {biData && (
+                        <div style={{ marginTop: '20px', display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
+                            <div style={{ padding: '20px', background: 'white', borderRadius: '8px', flex: '1', border: '1px solid #ddd' }}>
+                                <h3 style={{ color: BCC_BLUE }}>🚀 ТОП-3 Лучших филиала</h3>
+                                {biData.topBest.map((f, i) => (
+                                    <div key={i} style={{ padding: '8px', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between',backgroundColor: getRiskColor(f.pct) }}>
+                                        <span>{i + 1}. {f.UnitName}</span>
+                                        <b>{f.pct ? f.pct.toFixed(1) : 0}%</b>
+                                    </div>
+                                ))}
+                            </div>
+                            <div style={{ padding: '20px', background: 'white', borderRadius: '8px', flex: '1', border: '1px solid #ddd' }}>
+                                <h3 style={{ color: BCC_BLUE }}>📊 Итого по холдингу</h3>
+                                <div style={{ fontSize: '18px', marginTop: '10px' }}>
+                                    <p>План: {formatBYN(biData.summary.totalTarget)}</p>
+                                    <p>Факт: {formatBYN(biData.summary.totalActual)}</p>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                   {biData && biData.topWorst && (
+    <div style={{ marginTop: '20px', padding: '20px', background: 'white', borderRadius: '8px', border: '1px solid #ddd' }}>
+        <h3 style={{ color: '#c53030' }}>⚠️ ТОП-3 Отстающих (требуют внимания)</h3>
+        {biData.topWorst.map((f, i) => (
+            <div key={i} style={{ 
+                padding: '10px', 
+                borderBottom: '1px solid #eee', 
+                display: 'flex', 
+                justifyContent: 'space-between',
+                backgroundColor: '#f8d7da' 
+            }}>
+                <span>{i+1}. {f.UnitName}</span>
+                <b>{f.pct ? f.pct.toFixed(1) : 0}%</b>
+            </div>
+        ))}
+    </div>
+)}
+
                 </div>
             </div>
         )}
@@ -298,7 +356,38 @@ const ReportsSection = ({ units, filters, exportFn }) => {
         </div>
         <table style={styles.adminTable}>
           <thead><tr><th>Наименование</th><th>План</th><th>Факт</th><th>%</th></tr></thead>
-          <tbody>{data.map((r,i)=><tr key={i}><td>{r.UnitName || r.ProductName}</td><td>{formatBYN(r.PlanVal)}</td><td>{formatBYN(r.FactVal)}</td><td>{r.PlanVal>0?((r.FactVal/r.PlanVal)*100).toFixed(1):0}%</td></tr>)}</tbody>
+        <tbody>
+    {/* 1. Рендерим данные */}
+    {Array.isArray(data) && data.map((r, i) => (
+      <tr key={i}>
+        <td>{r.ProductName || r.UnitName || "Без названия"}</td>
+        <td>{formatBYN ? formatBYN(r.PlanVal || 0) : r.PlanVal}</td>
+        <td>{formatBYN ? formatBYN(r.FactVal || 0) : r.FactVal}</td>
+        <td>{r.PlanVal > 0 ? ((r.FactVal / r.PlanVal) * 100).toFixed(1) : 0}%</td>
+      </tr>
+    ))}
+
+    {/* 2. Строка ИТОГО */}
+    {Array.isArray(data) && data.length > 0 && (
+      <tr style={{ fontWeight: 'bold', backgroundColor: '#f9f9f9', borderTop: '3px solid #ccc' }}>
+        {/* ИТОГО строго под колонкой наименований */}
+        <td style={{ textAlign: 'left', paddingLeft: '10px' }}>ИТОГО</td>
+        
+        {/* Суммы */}
+        <td>{formatBYN ? formatBYN(data.reduce((sum, item) => sum + (Number(item.PlanVal) || 0), 0)) : 0}</td>
+        <td>{formatBYN ? formatBYN(data.reduce((sum, item) => sum + (Number(item.FactVal) || 0), 0)) : 0}</td>
+        
+        {/* Процент */}
+        <td>
+          {(() => {
+            const p = data.reduce((sum, item) => sum + (Number(item.PlanVal) || 0), 0);
+            const f = data.reduce((sum, item) => sum + (Number(item.FactVal) || 0), 0);
+            return p > 0 ? ((f / p) * 100).toFixed(1) : 0;
+          })()}%
+        </td>
+      </tr>
+    )}
+  </tbody>
         </table>
       </div>
     </div>
@@ -569,7 +658,7 @@ const KpiManagementSection = ({ units, products, refresh, filters }) => {
                         <form onSubmit={handleCreateUnitWithManager} style={styles.formGrid}>
                             <div style={styles.inputBox}>
                                 <label>Название предприятия *</label>
-                                <input value={unitForm.UnitName} onChange={e => setUnitForm({ ...unitForm, UnitName: e.target.value })} style={styles.input} required placeholder="Например, ООО ОФИСТОН..."/>
+                                <input value={unitForm.UnitName} onChange={e => setUnitForm({ ...unitForm, UnitName: e.target.value })} style={styles.input} required placeholder="Например, ООО БЦК..."/>
                             </div>
                             <div style={styles.inputBox}>
                                 <label>УНП</label>
