@@ -497,6 +497,64 @@ app.get('/api/analytics/dashboard', async (req, res) => {
         res.status(500).json({ error: err.message }); 
     }
 });
+app.get('/api/users', async (req, res) => {
+    try {
+        // Делаем LEFT JOIN, чтобы вытащить UnitName из таблицы Units
+        const query = `
+            SELECT u.Id, u.Username, u.Role, u.UnitId, un.UnitName 
+            FROM Users u 
+            LEFT JOIN Units un ON u.UnitId = un.Id
+        `;
+        const result = await pool.request().query(query);
+        res.json(result.recordset);
+    } catch (err) {
+        res.status(500).send(err.message);
+    }
+});
+// Добавь этот блок в server.js
+app.delete('/api/users/:id', async (req, res) => {
+    try {
+        const userId = req.params.id;
+        console.log("Удаляем пользователя с ID:", userId); // Для отладки в консоли
+        await pool.request()
+            .input('id', userId)
+            .query('DELETE FROM Users WHERE Id = @id');
+        res.status(200).send('Пользователь удален');
+    } catch (err) {
+        console.error("Ошибка при удалении:", err);
+        res.status(500).send(err.message);
+    }
+});
+app.put('/api/users/:id', async (req, res) => {
+    try {
+        const { Username, Password, UnitId } = req.body;
+        // ВНИМАНИЕ: если пароль меняется, его тут нужно хешировать!
+        // Но если ты просто хочешь менять как текст:
+        await pool.request()
+            .input('id', req.params.id)
+            .input('u', Username)
+            .input('p', Password)
+            .input('un', UnitId || null)
+            .query('UPDATE Users SET Username = @u, Password = @p, UnitId = @un WHERE Id = @id');
+        res.status(200).send('Обновлено');
+    } catch (err) { res.status(500).send(err.message); }
+});
+
+// 2. Добавление пользователя БЕЗ проверки токена
+app.post('/api/users', async (req, res) => {
+    const { username, password, role, unit_id } = req.body;
+    const hashedPassword = await bcrypt.hash(password, 10);
+    try {
+        await pool.request()
+            .input('u', username)
+            .input('p', hashedPassword)
+            .input('r', role)
+            .input('un', unit_id)
+            .query('INSERT INTO Users (username, password, role, unit_id) VALUES (@u, @p, @r, @un)');
+        res.status(201).send('Пользователь добавлен');
+    } catch (err) {
+        res.status(500).send(err.message);
+    }
+});
 
 app.listen(5000, () => console.log("✅ Сервер запущен на порту 3001"));
-

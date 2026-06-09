@@ -48,7 +48,8 @@ const App = () => {
       }
     }
   }, [units, user]);
-  // BI-аналитика: загрузка данных при изменении фильтров
+
+  // BI-аналитика
   useEffect(() => {
     const fetchBiData = async () => {
       try {
@@ -60,13 +61,12 @@ const App = () => {
     };
     fetchBiData();
   }, [filters]);
-  // Функция, которая решает, какой цвет вернуть
-const getRiskColor = (pct) => {
-  if (pct < 80) return '#f8d7da'; // Светло-красный, если плохо
-  if (pct >= 100) return '#d4edda'; // Светло-зеленый, если перевыполнили
-  return 'transparent'; // Белый, если норма
-};
-  
+
+  const getRiskColor = (pct) => {
+    if (pct < 80) return '#f8d7da';
+    if (pct >= 100) return '#d4edda';
+    return 'transparent';
+  };
 
   const exportToExcel = (data, reportName) => {
     const periodLabel = filters.periodType === 'year' ?
@@ -99,19 +99,37 @@ const getRiskColor = (pct) => {
 
   if (!user) return <LoginScreen setUser={setUser} />;
 
+  // Проверка прав на просмотр отчетов
+  const canViewReports = user.Role === 'Director' || user.Role === 'HeadManager';
+
   return (
     <div style={styles.container}>
       <aside style={styles.sidebar}>
         <div style={styles.logo}>БЦК <span>KPI WEB</span></div>
         <nav style={styles.nav}>
           <NavItem icon={<BarChart2/>} label="Дашборд" active={activeTab==='dashboard'} onClick={()=>setActiveTab('dashboard')} />
+          {/* Вставляй сюда, под кнопкой "Коррекция KPI" */}
+{user.Role === 'HeadManager' && (
+  <NavItem 
+    icon={<Settings size={16}/>} 
+    label="Пользователи" 
+    active={activeTab === 'users'} 
+    onClick={() => setActiveTab('users')} 
+  />
+)}
           {user.Role !== 'Director' && <NavItem icon={<PlusCircle/>} label="Ввод данных" active={activeTab==='entry'} onClick={()=>setActiveTab('entry')} />}
+          
           {user.Role === 'HeadManager' && <NavItem icon={<Settings/>} label="Управление" active={activeTab==='admin'} onClick={()=>setActiveTab('admin')} />}
+          
           {user.Role === 'HeadManager' && <NavItem icon={<Edit3 size={16}/>} label="Коррекция KPI и Персонал" active={activeTab==='kpi_mgmt'} onClick={()=>setActiveTab('kpi_mgmt')} />}
-          <NavItem icon={<FileText/>} label="Отчеты" active={activeTab==='reports'} onClick={()=>setActiveTab('reports')} />
+
+          {/* Разграничение доступа к Отчетам */}
+          {canViewReports && (
+            <NavItem icon={<FileText/>} label="Отчеты" active={activeTab==='reports'} onClick={()=>setActiveTab('reports')} />
+          )}
         </nav>
         <div style={styles.userCard}>
-          <b>{user.FullName}</b><br/><small>{user.Role === 'HeadManager' ? 'Ведущий специалист' : (user.UnitName || 'Ххолдинг')}</small>
+          <b>{user.FullName}</b><br/><small>{user.Role === 'HeadManager' ? 'Ведущий специалист' : (user.UnitName || 'Холдинг')}</small>
           <button onClick={()=>{localStorage.clear(); window.location.reload();}} style={styles.logoutBtn}><LogOut size={14}/> Выход</button>
         </div>
       </aside>
@@ -140,9 +158,14 @@ const getRiskColor = (pct) => {
                 </select>
             </div>
         </header>
+        
+        {activeTab === 'users' && user.Role === 'HeadManager' && (
+    <UsersManagement units={units} />
+)}
 
         {activeTab === 'dashboard' && (
             <div style={styles.content}>
+                {/* ... (дашборд без изменений) */}
                 <div style={styles.statsRow}>
                     <div style={styles.statCard}>План: <b>{formatBYN(totals.t)}</b></div>
                     <div style={styles.statCard}>Факт: <b>{formatBYN(totals.a)}</b></div>
@@ -160,7 +183,7 @@ const getRiskColor = (pct) => {
                             <Bar dataKey="TargetValue" fill={BCC_BLUE} name="План"/><Bar dataKey="ActualValue" fill={BCC_YELLOW} name="Факт"/>
                         </BarChart>
                     </ResponsiveContainer>
-         {biData && (
+                    {biData && (
                         <div style={{ marginTop: '20px', display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
                             <div style={{ padding: '20px', background: 'white', borderRadius: '8px', flex: '1', border: '1px solid #ddd' }}>
                                 <h3 style={{ color: BCC_BLUE }}>🚀 ТОП-3 Лучших филиала</h3>
@@ -180,37 +203,40 @@ const getRiskColor = (pct) => {
                             </div>
                         </div>
                     )}
-                   {biData && biData.topWorst && (
-    <div style={{ marginTop: '20px', padding: '20px', background: 'white', borderRadius: '8px', border: '1px solid #ddd' }}>
-        <h3 style={{ color: '#c53030' }}>⚠️ ТОП-3 Отстающих (требуют внимания)</h3>
-        {biData.topWorst.map((f, i) => (
-            <div key={i} style={{ 
-                padding: '10px', 
-                borderBottom: '1px solid #eee', 
-                display: 'flex', 
-                justifyContent: 'space-between',
-                backgroundColor: '#f8d7da' 
-            }}>
-                <span>{i+1}. {f.UnitName}</span>
-                <b>{f.pct ? f.pct.toFixed(1) : 0}%</b>
-            </div>
-        ))}
-    </div>
-)}
-
+                    {biData && biData.topWorst && (
+                        <div style={{ marginTop: '20px', padding: '20px', background: 'white', borderRadius: '8px', border: '1px solid #ddd' }}>
+                            <h3 style={{ color: '#c53030' }}>⚠️ ТОП-3 Отстающих (требуют внимания)</h3>
+                            {biData.topWorst.map((f, i) => (
+                                <div key={i} style={{ 
+                                    padding: '10px', 
+                                    borderBottom: '1px solid #eee', 
+                                    display: 'flex', 
+                                    justifyContent: 'space-between',
+                                    backgroundColor: '#f8d7da' 
+                                }}>
+                                    <span>{i+1}. {f.UnitName}</span>
+                                    <b>{f.pct ? f.pct.toFixed(1) : 0}%</b>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </div>
             </div>
         )}
 
         {activeTab === 'admin' && <AdminSection units={units} products={products} refresh={fetchData} />}
         {activeTab === 'entry' && <EntrySection user={user} products={products} units={units} refresh={fetchData} filters={filters} />}
-        {activeTab === 'reports' && <ReportsSection units={units} filters={filters} exportFn={exportToExcel} />}
+        
+        {/* Отчеты теперь тоже защищены */}
+        {activeTab === 'reports' && canViewReports && <ReportsSection units={units} filters={filters} exportFn={exportToExcel} />}
+        
         {activeTab === 'kpi_mgmt' && <KpiManagementSection units={units} products={products} refresh={fetchData} filters={filters} />}
+     
       </main>
+
     </div>
   );
 };
-
 const EntrySection = ({ user, products, units, refresh, filters }) => {
     const isLead = user.Role === 'HeadManager';
     const [form, setForm] = useState({ unitId: isLead ? '' : user.UnitId, productId: '', val: '' });
@@ -566,24 +592,34 @@ const KpiManagementSection = ({ units, products, refresh, filters }) => {
         } catch (err) { alert("Ошибка удаления!"); }
     };
 
-    const handleCreateUnitWithManager = async (e) => {
-        e.preventDefault();
-        if (!unitForm.UnitName || !unitForm.Username || !unitForm.Password) {
-            return alert("Заполните Название завода, Логин и Пароль менеджера!");
-        }
-        try {
-            await axios.post('/api/admin/units-with-manager', unitForm);
-            alert("Завод и аккаунт менеджера успешно созданы!");
-            setUnitForm({
-                UnitName: '', UNP: '', LegalAddress: '', DirectorName: '', PhoneNumber: '', UnitType: 'Завод',
-                Username: '', Password: '', FullName: ''
-            });
-            refresh();
-        } catch (err) { 
-            console.error(err);
-            alert("Ошибка при создании! Проверьте, что логин уникален и бэкенд запущен."); 
-        }
-    };
+   const handleCreateUnitWithManager = async (e) => {
+    e.preventDefault();
+
+    // 1. ПРОВЕРКА (валидация):
+    if (!unitForm.UnitName || unitForm.UnitName.trim() === '') {
+        return alert("Ошибка: Название завода не может быть пустым!");
+    }
+    if (!unitForm.Username || unitForm.Username.trim() === '') {
+        return alert("Ошибка: Логин менеджера не может быть пустым!");
+    }
+    if (!unitForm.Password || unitForm.Password.length < 6) {
+        return alert("Ошибка: Пароль должен содержать минимум 6 символов!");
+    }
+
+    // 2. ЕСЛИ ВСЁ ОК, идем дальше:
+    try {
+        await axios.post('http://localhost:5000/api/admin/units-with-manager', unitForm);
+        alert("Завод и аккаунт менеджера успешно созданы!");
+        setUnitForm({
+            UnitName: '', UNP: '', LegalAddress: '', DirectorName: '', PhoneNumber: '', UnitType: 'Завод',
+            Username: '', Password: '', FullName: ''
+        });
+        refresh();
+    } catch (err) { 
+        console.error(err);
+        alert("Ошибка при создании! Проверьте, что логин уникален."); 
+    }
+};
 
     return (
         <div style={styles.content}>
@@ -604,8 +640,8 @@ const KpiManagementSection = ({ units, products, refresh, filters }) => {
                             </select>
 
                             <select value={isTarget} onChange={e => setIsTarget(e.target.value === 'true')} style={styles.select}>
-                                <option value="true">Планы (KPI_Targets)</option>
-                                <option value="false">Факты (KPI_Actuals)</option>
+                                <option value="true">Планы </option>
+                                <option value="false">Факты </option>
                             </select>
 
                             <button onClick={loadKpiRecords} style={styles.accentBtn}>Показать записи</button>
@@ -662,14 +698,14 @@ const KpiManagementSection = ({ units, products, refresh, filters }) => {
                             </div>
                             <div style={styles.inputBox}>
                                 <label>УНП</label>
-                                <input value={unitForm.UNP} onChange={e => setUnitForm({ ...unitForm, UNP: e.target.value })} style={styles.input} placeholder="9 знаков"/>
+                                <input value={unitForm.UNP} onChange={e => setUnitForm({ ...unitForm, UNP: e.target.value })} style={styles.input} placeholder=""/>
                             </div>
                             <div style={styles.inputBox}>
                                 <label>ФИО Директора</label>
                                 <input value={unitForm.DirectorName} onChange={e => setUnitForm({ ...unitForm, DirectorName: e.target.value })} style={styles.input} placeholder="Петров А.Н."/>
                             </div>
                             <div style={styles.inputBox}>
-                                <label>Тип юнита</label>
+                                <label>Тип </label>
                                 <select value={unitForm.UnitType} onChange={e => setUnitForm({ ...unitForm, UnitType: e.target.value })} style={styles.select}>
                                     <option value="Завод">Завод</option>
                                     <option value="Филиал">Филиал</option>
@@ -736,5 +772,90 @@ const styles = {
   loginPage: { height: '100vh', background: BCC_BLUE, display: 'flex', justifyContent: 'center', alignItems: 'center' },
   loginCard: { background: 'white', padding: '50px', borderRadius: '20px', display: 'flex', flexDirection: 'column', gap: '20px', width: '350px', boxShadow: '0 15px 35px rgba(0,0,0,0.3)' }
 };
+// --- ВАЖНО: ЭТО ДОЛЖНО БЫТЬ В САМОМ НИЗУ ФАЙЛА, ПОСЛЕ ЗАКРЫВАЮЩЕЙ СКОБКИ App ---
+const UsersManagement = ({ units }) => {
+    const [users, setUsers] = React.useState([]);
+    const [editingUser, setEditingUser] = React.useState(null);
+
+    const loadUsers = () => {
+        axios.get('/api/users').then(res => setUsers(res.data));
+    };
+
+    React.useEffect(() => { loadUsers(); }, []);
+
+    // ОПРЕДЕЛЯЕМ ФУНКЦИЮ УДАЛЕНИЯ ВНУТРИ КОМПОНЕНТА
+    const deleteUser = async (id) => {
+        if(window.confirm('Удалить пользователя?')) {
+            try {
+                await axios.delete(`/api/users/${id}`);
+                loadUsers();
+            } catch (err) {
+                console.error("Ошибка удаления:", err);
+                alert("Не удалось удалить пользователя");
+            }
+        }
+    };
+
+    const saveEdit = async () => {
+        try {
+            await axios.put(`/api/users/${editingUser.Id}`, editingUser);
+            setEditingUser(null);
+            loadUsers();
+            alert("Сохранено!");
+        } catch (err) { alert("Ошибка сохранения"); }
+    };
+
+    return (
+        <div style={{ padding: '20px' }}>
+            <h2>Управление учетными записями</h2>
+            <table style={{ width: '100%', borderCollapse: 'collapse', background: 'white' }}>
+                <thead>
+                    <tr style={{ textAlign: 'left', borderBottom: '2px solid #ddd' }}>
+                        <th>Логин</th><th>Роль</th><th>Завод</th><th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {users.map(u => (
+                        <tr key={u.Id} style={{ borderBottom: '1px solid #eee' }}>
+                            <td style={{ padding: '10px' }}>{u.Username}</td>
+                            <td style={{ padding: '10px' }}>{u.Role === 'HeadManager' ? 'Менеджер' : 'Директор'}</td>
+                            <td style={{ padding: '10px' }}>{u.UnitName || '—'}</td>
+                            <td style={{ padding: '10px' }}>
+                                <button onClick={() => setEditingUser(u)} style={{marginRight:'10px'}}>Ред.</button>
+                                <button onClick={() => deleteUser(u.Id)} style={{color:'red'}}>Удал.</button>
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+
+            {editingUser && (
+                <div style={{ position:'fixed', top:0, left:0, width:'100%', height:'100%', background:'rgba(0,0,0,0.5)', display:'flex', justifyContent:'center', alignItems:'center', zIndex: 1000 }}>
+                    <div style={{ background:'white', padding:'30px', borderRadius:'15px', width:'350px' }}>
+                        <h3>Редактирование: {editingUser.Username}</h3>
+                        
+                        <label>Логин:</label>
+                        <input value={editingUser.Username} onChange={e => setEditingUser({...editingUser, Username: e.target.value})} style={{width:'100%', marginBottom:'10px', display:'block'}} />
+                        
+                        <label>Пароль:</label>
+                        <input value={editingUser.Password || ''} onChange={e => setEditingUser({...editingUser, Password: e.target.value})} style={{width:'100%', marginBottom:'10px', display:'block'}} />
+
+                        <label>Предприятие:</label>
+                        <select value={editingUser.UnitId || ''} onChange={e => setEditingUser({...editingUser, UnitId: e.target.value})} style={{width:'100%', marginBottom:'20px', display:'block'}}>
+                            <option value="">-- Выберите завод --</option>
+                            {units.map(u => <option key={u.Id} value={u.Id}>{u.UnitName}</option>)}
+                        </select>
+                        
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                            <button onClick={saveEdit} style={{ flex: 1, padding: '10px', background: '#0054a6', color: 'white', border: 'none', borderRadius: '5px' }}>Сохранить</button>
+                            <button onClick={() => setEditingUser(null)} style={{ flex: 1, padding: '10px', background: '#ccc', border: 'none', borderRadius: '5px' }}>Отмена</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
 
 export default App;
