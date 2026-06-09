@@ -2,7 +2,7 @@ const express = require('express');
 const sql = require('mssql');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
-const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, AlignmentType, WidthType } = require('docx');
+const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, AlignmentType, WidthType, ShadingType } = require('docx');
 
 const app = express();
 app.use(express.json());
@@ -346,13 +346,8 @@ app.post('/api/admin/units-with-manager', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-
 // =========================================================================
-// КОНЕЦ НОВОГО ФУНКЦИОНАЛА
-// =========================================================================
-
-// =========================================================================
-// 📄 ДОБАВЛЕННЫЙ РОУТ ДЛЯ ГЕНЕРАЦИИ ОФИЦИАЛЬНОГО WORD ОТЧЕТА БЦК
+// 📄 ФИНАЛЬНАЯ РАБОЧАЯ ВЕРСИЯ WORD (Итоги по категориям + КРАСНЫЙ ФОН + Дата)
 // =========================================================================
 app.get('/api/reports/word', async (req, res) => {
     const { type, unitId, year, month, periodType } = req.query;
@@ -364,7 +359,6 @@ app.get('/api/reports/word', async (req, res) => {
         let query = "";
         let request = pool.request();
 
-        // ФОРМИРУЕМ ЗАПРОСЫ
         if (type === 'holding') {
             titleText = "СВОДНЫЙ ОТЧЕТ ПО ВЫПОЛНЕНИЮ KPI ПРЕДПРИЯТИЙ ХОЛДИНГА";
             query = `SELECT u.UnitName AS Name, 'Общие' AS CategoryName, 
@@ -398,10 +392,8 @@ app.get('/api/reports/word', async (req, res) => {
         }
 
         const dbResult = await request.query(query);
-        // Финальная чистка: только непустые имена
         const rawData = dbResult.recordset.filter(row => row.Name && row.Name.trim() !== '');
 
-        // ГРУППИРОВКА
         const groupedData = rawData.reduce((acc, row) => {
             const cat = (row.CategoryName && row.CategoryName.trim() !== '') ? row.CategoryName : "Без категории";
             if (!acc[cat]) acc[cat] = [];
@@ -409,7 +401,6 @@ app.get('/api/reports/word', async (req, res) => {
             return acc;
         }, {});
 
-        // ФОРМИРОВАНИЕ ДОКУМЕНТА
         const docChildren = [
             new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: "Республиканское производственно-торговое унитарное предприятие", italics: true, size: 18 })] }),
             new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: "«Управляющая компания холдинга «Белорусская цементная компания»", bold: true, italics: true, size: 18 })] }),
@@ -419,7 +410,12 @@ app.get('/api/reports/word', async (req, res) => {
         ];
 
         Object.keys(groupedData).forEach(catName => {
-            docChildren.push(new Paragraph({ text: catName.toUpperCase(), bold: true, alignment: AlignmentType.CENTER, spacing: { before: 400, after: 200 } }));
+            docChildren.push(new Paragraph({ 
+                text: catName.toUpperCase(), 
+                bold: true, 
+                alignment: AlignmentType.CENTER, 
+                spacing: { before: 400, after: 200 } 
+            }));
             
             const catRows = [
                 new TableRow({ children: [
@@ -430,20 +426,59 @@ app.get('/api/reports/word', async (req, res) => {
                 ]})
             ];
 
+            let catPlan = 0, catFact = 0;
+
             groupedData[catName].forEach(row => {
                 const pVal = parseFloat(row.PlanVal) || 0;
                 const fVal = parseFloat(row.FactVal) || 0;
-                const pct = pVal > 0 ? ((fVal / pVal) * 100).toFixed(1) + '%' : '0.0%';
+                const pctNum = pVal > 0 ? (fVal / pVal) * 100 : 0;
+                const pct = pctNum.toFixed(1) + '%';
+
+                catPlan += pVal;
+                catFact += fVal;
+
+                const isProblem = pctNum < 100 && pVal > 0;
+
                 catRows.push(new TableRow({ children: [
                     new TableCell({ children: [new Paragraph(row.Name || '')] }),
                     new TableCell({ children: [new Paragraph(pVal.toLocaleString('ru-RU'))] }),
                     new TableCell({ children: [new Paragraph(fVal.toLocaleString('ru-RU'))] }),
-                    new TableCell({ children: [new Paragraph(pct)] })
+                    new TableCell({ 
+                        children: [new Paragraph({ text: pct, color: isProblem ? "C00000" : undefined, bold: isProblem })] ,
+                        shading: isProblem ? { type: ShadingType.CLEAR, fill: "FFE6E6" } : undefined
+                    })
                 ]}));
             });
 
+            // ИТОГО ПО КАТЕГОРИИ
+            const catPctNum = catPlan > 0 ? (catFact / catPlan) * 100 : 0;
+            const catPct = catPctNum.toFixed(1) + '%';
+            const isCatProblem = catPctNum < 100 && catPlan > 0;
+
+            catRows.push(new TableRow({ 
+                children: [
+                    new TableCell({ children: [new Paragraph({ text: "ИТОГО ", bold: true })] }),
+                    new TableCell({ children: [new Paragraph(catPlan.toLocaleString('ru-RU'), { bold: true })] }),
+                    new TableCell({ children: [new Paragraph(catFact.toLocaleString('ru-RU'), { bold: true })] }),
+                    new TableCell({ 
+                        children: [new Paragraph({ text: catPct, bold: true, color: isCatProblem ? "C00000" : undefined })] ,
+                        shading: isCatProblem ? { type: ShadingType.CLEAR, fill: "FFE6E6" } : undefined
+                    })
+                ]
+            }));
+
             docChildren.push(new Table({ rows: catRows, width: { size: 100, type: WidthType.PERCENTAGE } }));
         });
+
+        // Дата формирования отчёта
+        const now = new Date();
+        const dateStr = `Отчет сформирован: ${now.toLocaleDateString('ru-RU')} в ${now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`;
+        docChildren.push(new Paragraph({ 
+            text: dateStr, 
+            alignment: AlignmentType.RIGHT, 
+            spacing: { before: 600 },
+            italics: true 
+        }));
 
         const doc = new Document({ sections: [{ children: docChildren }] });
         const b64string = await Packer.toBase64String(doc);
@@ -453,7 +488,8 @@ app.get('/api/reports/word', async (req, res) => {
         res.send(Buffer.from(b64string, 'base64'));
 
     } catch (error) {
-        console.error("Ошибка при генерации Word:", error);
+        console.error("Ошибка при генерации Word:", error.message);
+        console.error(error.stack); // Для отладки
         res.status(500).send("Ошибка при генерации документа: " + error.message);
     }
 });
